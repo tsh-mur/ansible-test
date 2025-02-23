@@ -1,0 +1,3 @@
+ansible_user: telex
+ansible_password: pass123
+dev: user1
