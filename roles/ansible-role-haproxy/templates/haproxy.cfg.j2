@@ -1,0 +1,125 @@
+#jinja2: lstrip_blocks: "True"
+{{ ansible_managed | comment }}
+global
+    log         stdout local0
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    maxconn     4000
+    user        haproxy
+    group       haproxy
+    daemon
+    stats       socket /var/lib/haproxy/stats level admin
+    ca-base     /etc/ssl/certs
+    crt-base    /etc/ssl/private
+
+
+   # See: https://ssl-config.mozilla.org/#server=haproxy&server-version=2.0.3&config=intermediate
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384
+    ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+
+defaults
+    mode                    http
+    log                     global
+    option                  httplog
+    option                  dontlognull
+    option                  http-server-close
+    option                  forwardfor except 127.0.0.0/8
+    option                  redispatch
+    retries                 {{ haproxy_retries }}
+    timeout http-request    {{ haproxy_timeout_http_request }}
+    timeout queue           {{ haproxy_timeout_check }}
+    timeout connect         {{ haproxy_timeout_connect }}
+    timeout client          {{ haproxy_timeout_client }}
+    timeout server          {{ haproxy_timeout_server }}
+    timeout http-keep-alive {{ haproxy_timeout_http_keep_alive }}
+    timeout check           {{ haproxy_timeout_check }}
+    maxconn                 {{ haproxy_maxconn }}
+
+{% if haproxy_stats == true %}
+listen stats
+    bind                 {{ haproxy_stats_bind_addr }}:{{ haproxy_stats_port }}
+    mode                 http
+    stats                enable
+    stats                uri /stats
+    stats                hide-version
+    stats                show-node
+{% endif %}
+
+{% for frontend in haproxy_frontends +%}
+frontend {{ frontend.name }}
+    bind {{ frontend.address }}:{{ frontend.port }}{% if frontend.ssl is defined and frontend.ssl == true %} ssl{% endif %}{% if haproxy_certs is defined and frontend.ssl == true and haproxy_certs | length >0 %} crt {{ haproxy_certdir }}{% endif %}{% if frontend.bind_options is defined and frontend.bind_options | length >0 %} {{ frontend.bind_options | join(' ') }}{% endif %}
+    
+    mode {{ frontend.mode | default('http') }}
+  {% if frontend.https_redirect is defined and frontend.https_redirect == true and frontend.ssl != true %}
+    {% if haproxy_stats == true %}
+    # ACL stats page
+    acl stats path_dir -i /stats
+    # Redirect HTTP to HTTPS but exclude stats page
+    redirect scheme https if !stats !{ ssl_fc }
+    {% else %}
+    # Redirect HTTP to HTTPS
+    http-request redirect scheme https unless { ssl_fc }
+    {% endif -%}  
+  {% endif -%}
+  {% if frontend.options is defined %}
+    {% for option in frontend.options %}
+    option {{ option }}
+    {% endfor %}
+  {% else %}
+    option httplog
+  {% endif %}
+  {% if frontend.http_requests is defined %}
+    {% for http_request in frontend.http_requests %}
+    http-request {{ http_request }}
+    {% endfor %}
+  {% endif -%}
+  {% if frontend.acls is defined and frontend.mode != "tcp" %}
+    # ACLs
+    {% for acl in frontend.acls %}
+    {{ acl }}
+    {% endfor %}
+  {% endif -%}
+  {% if frontend.default_backend is defined %}
+    # Fallback Backend
+    default_backend {{ frontend.default_backend }}
+  {% endif -%}
+{% endfor %}
+
+{% for backend in haproxy_backends +%}
+backend {{ backend.name }}
+  {% if backend.httpcheck is defined and backend.httpcheck == true %}
+    option httpchk
+  {% endif %}
+  {% if backend.additional_check is defined and backend.httpcheck == false %}
+    option {{ backend.additional_check }}
+  {% endif %}
+  {%- if backend.options is defined %}
+    {%- for option in backend.options %}
+    option {{ option }}
+    {% endfor %}
+  {% endif %}
+  {% if backend.http_check.send.method is defined %}
+    http-check send meth {{ backend.http_check.send.method }} uri {{ backend.http_check.send.uri }}
+  {% endif %}
+  {% if backend.http_check.expect is defined %}
+    http-check expect {{ backend.http_check.expect }}
+  {% endif %}
+  {% if backend.cookie is defined %}
+    cookie {{ backend.cookie }}
+  {% endif %}
+    balance {{ backend.balance | default(haproxy_backend_default_balance) }}
+    mode {{ backend.mode | default('http') }}
+  {% if backend.http_requests is defined %}
+    {%- for http_request in backend.http_requests %}
+    http-request {{ http_request }}
+    {% endfor %}
+  {% endif -%} 
+  {% for server in backend.servers %}
+    {% if server.name is defined %}
+    server {{ server.name }} {{ server.address | default(hostvars[server.name]['ansible_default_ipv4']['address']) }}{% if server.port is defined or backend.port is defined %}:{{ server.port | default(backend.port) }}{% endif %} {{ backend.server_options | join(' ') }} weight {{ server.weight | default(haproxy_backend_default_weight) }} {% if backend.cookie is defined %}cookie {{ server.name }}{% endif %} 
+    {% else %}
+    server {{ server }} {{ hostvars[server]['ansible_default_ipv4']['address'] }}:{{ backend.port }} {{ backend.server_options | join(' ') }} weight {{ server.weight | default(haproxy_backend_default_weight) }} {% if backend.cookie is defined %}cookie {{ server.name }}{% endif %}
+    {% endif %}
+  {% endfor %}
+{% endfor %}

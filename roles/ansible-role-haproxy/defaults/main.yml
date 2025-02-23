@@ -1,0 +1,18 @@
+---
+# defaults file for haproxy
+# Configure stats in HAProxy?
+haproxy_stats: yes # enable stats page
+haproxy_stats_port: 8050 # stats port
+haproxy_stats_bind_addr: "0.0.0.0" # bind stats ip on all interfaces
+
+# Default settings for HAProxy.
+haproxy_certdir: /etc/haproxy/certs # directory for tls certificates
+haproxy_retries: 3 # number of retries to perform on a server after a connection failure
+haproxy_timeout_http_request: 10s # maximum allowed time to wait for a complete HTTP request
+haproxy_timeout_connect: 10s # maximum time to wait for a connection attempt to a server to succeed
+haproxy_timeout_client: 1m # maximum inactivity time on the client side 
+haproxy_timeout_server: 1m # maximum time for pending data staying into output buffer
+haproxy_timeout_http_keep_alive: 10s # maximum allowed time to wait for a new HTTP request to appear
+haproxy_timeout_check: 10s # additional check timeout, but only after a connection has been already established
+haproxy_maxconn: 3000 # maximal number of concurrent connections that will be sent to this server
+haproxy_backend_default_weight: 1 # default weight for backend servers. can be overwritten with haproxy_backends.servers.weight

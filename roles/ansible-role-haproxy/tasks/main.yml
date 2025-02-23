@@ -1,0 +1,115 @@
+---
+# tasks file for haproxy
+
+- name: Install haproxy
+  ansible.builtin.package:
+    name:
+      - haproxy
+    state: present
+
+- name: Create group
+  ansible.builtin.group:
+    name: haproxy
+    system: yes
+    state: present
+
+- name: Create user
+  ansible.builtin.user:
+    name: haproxy
+    system: yes
+    state: present
+
+- name: Create SSL directory
+  file:
+    path: "{{ haproxy_certdir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0770'
+  when:
+    - copy_haproxy_certs is defined or existing_haproxy_certs is defined
+
+- name: Set fact haproxy_certs when using copy_haproxy_certs
+  set_fact:
+    haproxy_certs: "{{ copy_haproxy_certs }}"
+  when:
+    - copy_haproxy_certs is defined
+
+- name: Set fact haproxy_certs when using existing_haproxy_certs
+  set_fact:
+    haproxy_certs: "{{ existing_haproxy_certs }}"
+  when:
+    - existing_haproxy_certs is defined
+
+- name: Copy TLS Certificates
+  copy:
+    src: "{{item}}"
+    dest: "{{ haproxy_certdir }}/{{ item | basename }}"
+    owner: root
+    group: root
+    mode: '0640'
+  with_items: "{{ copy_haproxy_certs }}"
+  notify:
+    - Restart haproxy
+  when: copy_haproxy_certs is defined
+
+- name: Create symbolic links to existing certificates
+  file:
+    src: "{{ item }}"
+    dest: "{{ haproxy_certdir }}/{{ item | basename }}"
+    state: link
+    force: yes
+  with_items:
+    - "{{ existing_haproxy_certs }}"
+  when:
+    - existing_haproxy_certs is defined
+  notify:
+    - Restart haproxy
+
+- name: Set kernel parameter that allows binding nonlocal addresses (VIP IPs)
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_nonlocal_bind
+    value: '1'
+    state: present
+
+- name: Create HAProxy configuration from template
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    validate: haproxy -c -f %s
+    mode: "0640"
+  notify:
+    - Restart haproxy
+  when:
+    - ansible_default_ipv4 is defined
+
+- name: Modify selinux settings
+  block:
+    - name: Add haproxy_stats_port to http_port_t selinux type
+      community.general.seport:
+        ports: "{{ haproxy_stats_port }}"
+        proto: tcp
+        setype: http_port_t
+        state: present
+      when:
+        - haproxy_stats_port is defined
+
+    - name: Allow haproxy to open any port
+      ansible.posix.seboolean:
+        name: haproxy_connect_any
+        state: yes
+        persistent: yes
+      notify:
+        - Reboot
+  when:
+    - ansible_selinux.status is defined
+    - ansible_selinux.status == "enabled"
+
+- name: Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Start and enable haproxy
+  ansible.builtin.service:
+    name: haproxy
+    state: started
+    enabled: yes
